@@ -2,6 +2,7 @@
 #include <fstream>
 #include <random>
 #include <cmath>
+#include <omp.h>
 
 double G = 6.674*std::pow(10,-11);
 //double G = 1;
@@ -216,20 +217,36 @@ int main(int argc, char* argv[]) {
     if (step %printevery == 0)
       dump_state(s);
   
-    reset_force(s);
-    for (size_t i=0; i<s.nbpart; ++i)
-      for (size_t j=0; j<s.nbpart; ++j)
-	if (i != j)
-	  update_force(s, i, j);
+      reset_force(s);
+      #pragma omp parallel for schedule(dynamic) // Parallel force loop
+      for (size_t i = 0; i < s.nbpart; ++i) {
+        for (size_t j = 0; j < s.nbpart; ++j) {
+          if (i == j) continue;
+          double dx = s.x[j] - s.x[i];
+          double dy = s.y[j] - s.y[i];
+          double dz = s.z[j] - s.z[i];
+          double dist_sq = dx * dx + dy * dy + dz * dz + 0.1;
+          double dist = std::sqrt(dist_sq);
+          double F = G * s.mass[i] * s.mass[j] / dist_sq;
+          double Fx = F * dx / dist;
+          double Fy = F * dy / dist;
+          double Fz = F * dz / dist;
 
-    for (size_t i=0; i<s.nbpart; ++i) {
-      apply_force(s, i, dt);
-      update_position(s, i, dt);
+          #pragma omp atomic // Safe update
+          s.fx[j] += Fx;
+          #pragma omp atomic
+          s.fy[j] += Fy;
+          #pragma omp atomic
+          s.fz[j] += Fz;
+        }
+      }
+  
+      #pragma omp parallel for // Parallel velocity update
+      for (size_t i = 0; i < s.nbpart; ++i) apply_force(s, i, dt);
+  
+      #pragma omp parallel for // Parallel position update
+      for (size_t i = 0; i < s.nbpart; ++i) update_position(s, i, dt);
     }
+    return 0;
   }
   
-  //dump_state(s);  
-
-
-  return 0;
-}
